@@ -248,7 +248,7 @@ class FederatedClient(object):
         self.port = int(port)
  
         print("p2p init")
-        self.lib = cdll.LoadLibrary('./libp2p_peer.so')
+        self.lib = cdll.LoadLibrary('./GRING_plugin.so')
         self.lib.Init_p2p.restype = ctypes.c_char_p
         self.lib.Fedcomp_GR.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_byte]
         self.lib.Report_GR.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_byte, ctypes.c_int]
