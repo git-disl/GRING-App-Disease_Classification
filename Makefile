@@ -1,12 +1,12 @@
 UNAME := $(shell uname)
 
-all: libp2p_peer.so bootstrap
+all: GRING_plugin.so bootstrap
 
-libp2p_peer.so:
+GRING_plugin.so:
 	go build -buildmode=c-shared -o $@ peer.go
 
 bootstrap:
 	go build -o $@ bootstrap.go
 
 clean:
-	rm -f peer bootstrap libp2p_peer.so libp2p_peer.h
+	rm -f peer bootstrap GRING_plugin.so GRING_plugin.h
