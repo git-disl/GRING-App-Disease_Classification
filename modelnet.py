@@ -1,51 +1,20 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-class Net(nn.Module):
-    def __init__(self, in_channels, num_classes):
-        super(Net, self).__init__()
 
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(in_channels, 16, kernel_size=3),
-            nn.BatchNorm2d(16),
-            nn.ReLU())
+class siamese_model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.Linear(512, 256)
+        self.bn1 = nn.BatchNorm1d(256)
+        self.out = nn.Linear(256, 1)
 
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=3),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2))
-
-        self.layer3 = nn.Sequential(
-            nn.Conv2d(16, 64, kernel_size=3),
-            nn.BatchNorm2d(64),
-            nn.ReLU())
-
-        self.layer4 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3),
-            nn.BatchNorm2d(64),
-            nn.ReLU())
-
-        self.layer5 = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2))
-
-        self.fc = nn.Sequential(
-            nn.Linear(64 * 4 * 4, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_classes))
-
-    def forward(self, x):
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.layer5(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-
+    def hidden_forward(self, x):
+        x = F.relu(self.l1(x))
+        x = self.bn1(x)
         return x
+
+    def forward(self, x1, x2):
+        x = torch.abs(x1.view(-1, 512) - x2.view(-1, 512))
+        return torch.sigmoid(self.out(self.hidden_forward(x)))

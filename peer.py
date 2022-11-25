@@ -10,7 +10,8 @@ import numpy as np
 import json
 from ctypes import cdll
 import ctypes
-
+from torch.utils.data import Dataset as Dataset
+from torch.utils.data import DataLoader as DataLoader
 from tqdm import tqdm
 import torch
 import torch.nn as nn
@@ -20,7 +21,10 @@ import modelnet
 import datasource
 import medmnist
 from medmnist import Evaluator
-
+import cv2 
+import random
+from facenet_pytorch import MTCNN, InceptionResnetV1
+import torchvision.transforms as T
 client = None
 FUNC = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_char_p)
 FUNC2 = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_int)
@@ -34,6 +38,7 @@ lr = 0.001
 # ------------------------
 
 
+
 #to server
 OP_RECV                      = 0x00
 #OP_CLIENT_WAKE_UP            = 0x01 #obsolete
@@ -44,6 +49,56 @@ OP_CLIENT_EVAL               = 0x04
 OP_INIT                      = 0x05
 OP_REQUEST_UPDATE            = 0x06
 OP_STOP_AND_EVAL             = 0x07
+
+
+epoch = 50
+loss_history = [[],[]]
+accuracy_history = [[],[]]
+train_n_minibatches = 1
+
+class olivetti_faces_dataset(Dataset):
+    def __init__(self):
+        path = 'data/train/'
+        img = np.load(path+'olivetti_faces.npy') #First 10 same class
+        self.transforms = T.Compose([T.ToTensor()])
+        self.device = 'cpu'
+        self.resnet = InceptionResnetV1(pretrained='vggface2').to('cpu').eval()
+        self.data = []
+        for i in range(40):
+            self.data.append(img[i*10:i*10 + 10])
+        
+    def __len__(self):
+        return 800
+    
+    def embedding(self,x):
+        with torch.no_grad():
+            x = cv2.merge((x,x,x))*255
+            x = cv2.resize(x, dsize=(128, 128), interpolation=cv2.INTER_CUBIC)
+            x = (x - 127.5) / 128.0
+        return self.resnet(self.transforms(x).unsqueeze(0).to(self.device))
+        
+    def __getitem__(self,idx):
+        img1 , img2 , label = None , None , None
+        if idx%2 == 0: # same img
+            label = 1
+            n = random.randrange(0,40)
+            img1 = self.data[n][random.randrange(0,10)]
+            img2 = self.data[n][random.randrange(0,10)]
+    
+        
+        else:
+            label = 0
+            n = random.randrange(0,40)
+            img1 = self.data[n][random.randrange(0,10)]
+            n = random.randrange(0,40)
+            img2 = self.data[n][random.randrange(0,10)]
+
+        
+        img1_embedding = self.embedding(img1)
+        img2_embedding = self.embedding(img2)
+        return img1_embedding , img2_embedding , torch.FloatTensor([label]).to(self.device)
+    
+
 
 def obj_to_pickle_string(x):
     return base64.b64encode(pickle.dumps(x))
@@ -66,7 +121,7 @@ class LocalModel(object):
         self.model_config = model_config
         self.model_id = model_config['model_id']
 
-        self.model = modelnet.Net(in_channels=datasource.n_channels, num_classes=datasource.n_classes)
+        self.model = modelnet.siamese_model()
         self.datasource = datasource
         # define loss function and optimizer
         if datasource.task == "multi-label, binary-class":
@@ -91,8 +146,15 @@ class LocalModel(object):
         self.model.load_state_dict(self.current_weights)
 
     def train_one_round(self):
+        print("Here")
         train_losses=[]
         train_accu=[]
+        criterion = nn.BCELoss() 
+        optimizer = optim.Adam(self.model.parameters(),lr = 0.001)
+        train_dataset = olivetti_faces_dataset()
+        train_dataloader = DataLoader(train_dataset,2)
+        best_acc = 0
+        print(train_dataloader)
         for epoch in range(NUM_LOCAL_EPOCHS):
             train_correct = 0
             train_total = 0
@@ -102,36 +164,82 @@ class LocalModel(object):
             running_loss = 0
             correct = 0
             total = 0
-
+            print("inside loop")
             self.model.train()
-            for inputs, targets in tqdm(self.datasource.train_loader):
-                # forward + backward + optimize
-                self.optimizer.zero_grad()
-                outputs = self.model(inputs)
+            print("after train")
+            c = 0
+            for batch_idx , x in enumerate(train_dataloader):
+                if c>0:
+                    break
+                c+=1
+                optimizer.zero_grad()
+                x , y , z = x[0] , x[1] , x[2]
+                print(x,y,z)
+                y_pred = self.model(x,y)
+                
+                # Calculating Loss
+                loss = criterion(y_pred,z)
+                loss.backward()
+                optimizer.step()
+                loss_history[0].append(float(loss.detach()))
+                
+                #Calaculating Accuracy
+                correct = 0
+                y_pred = y_pred.cpu().detach().numpy().tolist()
+                y = z.cpu().detach().numpy().tolist()
+                for i,j in zip(y,y_pred):
+                    if round(j[0]) == int(i[0]):
+                        correct = correct + 1
+                accuracy_history[0].append((correct/x.shape[0])*100)
+                print("inside")
+            
+            loss_history[1].append(sum(loss_history[0][-1:-train_n_minibatches-1:-1])/train_n_minibatches)
+            accuracy_history[1].append(sum(accuracy_history[0][-1:-train_n_minibatches-1:-1])/train_n_minibatches)
+            
+            if best_acc < accuracy_history[1][-1]:
+                best_acc = accuracy_history[1][-1]
+                best_loss = loss_history[1][-1]
+                
+                torch.save(self.model.state_dict(),'saved_models/siamese_model')
+            if (epoch+1)%1 == 0:
+            #Log for e+1th epoch
+                print(f'---------------------------------------EPOCH {epoch+1}-------------------------------------------')
+                print(f'Loss for EPOCH {epoch+1}  TRAIN LOSS : {loss_history[1][-1]}',end = ' ')
+                print(f'TRAIN ACCURACY : {accuracy_history[1][-1]}')
+                print(f'---------------------------------------------------------------------------------------------')
+                
 
-                if self.datasource.task == 'multi-label, binary-class':
-                    targets = targets.to(torch.float32)
-                    loss = self.criterion(outputs, targets)
-                else:
-                    targets = targets.squeeze().long()
-                    loss = self.criterion(outputs, targets)
 
-                    loss.backward()
-                    self.optimizer.step()
 
-                    running_loss += loss.item()
-                    _, predicted = outputs.max(1)
-                    total += targets.size(0)
-                    correct += predicted.eq(targets).sum().item()
+            # self.model.train()
+            # for inputs, targets in tqdm(self.datasource.train_loader):
+            #     # forward + backward + optimize
+            #     self.optimizer.zero_grad()
+            #     outputs = self.model(inputs)
 
-            train_loss=running_loss/len(self.datasource.train_loader)
-            accu=100.*correct/total
+            #     if self.datasource.task == 'multi-label, binary-class':
+            #         targets = targets.to(torch.float32)
+            #         loss = self.criterion(outputs, targets)
+            #     else:
+            #         targets = targets.squeeze().long()
+            #         loss = self.criterion(outputs, targets)
 
-            train_accu.append(accu)
-            train_losses.append(train_loss)
-            print('Train Loss: %.3f | Accuracy: %.3f'%(train_loss,accu))
+            #         loss.backward()
+            #         self.optimizer.step()
 
-        return self.model.state_dict(), train_loss, accu
+            #         running_loss += loss.item()
+            #         _, predicted = outputs.max(1)
+            #         total += targets.size(0)
+            #         correct += predicted.eq(targets).sum().item()
+
+            # train_loss=running_loss/len(self.datasource.train_loader)
+            # accu=100.*correct/total
+
+            # train_accu.append(accu)
+            # train_losses.append(train_loss)
+            # print('Train Loss: %.3f | Accuracy: %.3f'%(train_loss,accu))
+        print("Training done")
+        return self.model.state_dict(), best_loss, best_acc
 
     def test(self, split):
         self.model.eval()

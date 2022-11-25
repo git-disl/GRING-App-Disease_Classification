@@ -14,7 +14,7 @@ import logging
 default_logger = logging.getLogger('tunnel.logger')
 default_logger.setLevel(logging.CRITICAL)
 default_logger.disabled = False
-
+from modelnet import siamese_model
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -74,9 +74,11 @@ class GlobalModel_Net(GlobalModel):
         super(GlobalModel_Net, self).__init__()
 
     def build_model(self):
-        data = datasource.MedMNIST()
-        model = modelnet.Net(in_channels=data.n_channels, num_classes=data.n_classes)
-
+        # data = datasource.MedMNIST()
+        # model = modelnet.Net(in_channels=data.n_channels, num_classes=data.n_classes)
+        siamese_model_path = "saved_models/siamese_model"
+        model = siamese_model()
+        model.load_state_dict(torch.load(siamese_model_path, map_location=torch.device('cpu')))
         return model
        
 # Federated Averaging algorithm with the server pulling from clients
